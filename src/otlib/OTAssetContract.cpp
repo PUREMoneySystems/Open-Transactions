@@ -130,11 +130,15 @@
  -----END PGP SIGNATURE-----
  **************************************************************/
 
+#define _USE_MATH_DEFINES
+#include <cmath>
+
 #include "stdafx.hpp"
 
 #include "OTAssetContract.hpp"
 
 #include "OTAccount.hpp"
+#include "OTASCIIArmor.hpp"
 #include "OTAcctFunctor.hpp"
 #include "OTAmount.hpp"
 #include "OTBasket.hpp"
@@ -142,9 +146,21 @@
 #include "OTLog.hpp"
 #include "OTStorage.hpp"
 
+#include "OTBylaw.hpp"
+#include "OTClause.hpp"
+
 #include "irrxml/irrXML.hpp"
 
 #include <fstream>
+
+#ifdef OT_USE_SCRIPT_CHAI
+#	include "OTScriptChai.hpp"
+#	include <chaiscript/chaiscript.hpp>
+#	ifdef OT_USE_CHAI_STDLIB
+#	    include <chaiscript/chaiscript_stdlib.hpp>
+#	endif
+#endif
+
 
 using namespace irr;
 using namespace io;
@@ -519,6 +535,12 @@ int64_t OTAssetContract::CentsOnly(const OTAmount & theInput) const
 }
 
 
+OTAssetContract::OTAssetContract(OTString & unsignedXML) : OTContract(), m_bIsCurrency(true), m_bIsShares(false){  
+  m_xmlUnsigned.Set(unsignedXML);
+  LoadContractXML();
+}
+
+
 OTAssetContract::OTAssetContract() : OTContract(), m_bIsCurrency(true), m_bIsShares(false)
 {
 	
@@ -532,11 +554,49 @@ OTAssetContract::OTAssetContract(OTString & name, OTString & foldername, OTStrin
 }
 
 
-OTAssetContract::~OTAssetContract()
-{
+OTAssetContract::~OTAssetContract() {
 	// OTContract::~OTContract is called here automatically, and it calls Release.
 	// So I don't need to call it here again when it's already called by the parent.
+  
+	Release_Script();
 }
+
+// Go through the existing list of bylaws at this point, and delete them all.
+void OTAssetContract::Release_Script() {
+	while (!m_mapBylaws.empty()){
+		OTBylaw * pBylaw = m_mapBylaws.begin()->second;
+		OT_ASSERT(NULL != pBylaw);
+
+		m_mapBylaws.erase(m_mapBylaws.begin());
+
+		delete pBylaw;
+		pBylaw = NULL;
+	}
+}
+
+void OTAssetContract::Release() {
+	Release_Script();
+
+	// If there were any dynamically allocated objects, clean them up here.
+	OTContract::Release(); // since I've overridden the base class, I call it now...
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 bool OTAssetContract::DisplayStatistics(OTString & strContents) const
@@ -893,7 +953,7 @@ bool OTAssetContract::CreateBasket(OTBasket & theBasket, OTPseudonym & theSigner
 void OTAssetContract::CreateContents()
 {
     // ----------------------------------
-    m_strVersion = "2.0";  // 2.0 since adding credentials.
+    m_strVersion = "2.1";  // 2.1 since adding scriptableContract.
     // ----------------------------------
  	m_xmlUnsigned.Release();
     m_xmlUnsigned.Concatenate("<?xml version=\"%s\"?>\n", "1.0");
@@ -947,6 +1007,21 @@ void OTAssetContract::CreateContents()
                                       m_strCurrencyType  .Get(),
                                       m_strIssueDate     .Get());
     }
+    
+    //Add any scripted bylaws to the asset contract    
+    if ((m_mapBylaws.size()>0)) {
+	    m_xmlUnsigned.Concatenate("<scriptableContract\n numBylaws=\"%d\" >\n\n", m_mapBylaws.size());
+
+	    FOR_EACH(mapOfBylaws, m_mapBylaws) {
+		    OTBylaw * pBylaw = (*it).second;
+		    OT_ASSERT(NULL != pBylaw);
+
+		    pBylaw->Serialize(m_xmlUnsigned, false);
+	    }
+
+	    m_xmlUnsigned.Concatenate("</scriptableContract>\n\n");
+    }
+    
     // --------------------------------------------
     // This is where OTContract scribes m_xmlUnsigned with its keys, conditions, etc.
     this->CreateInnerContents();    
@@ -960,114 +1035,803 @@ void OTAssetContract::CreateContents()
 //
 int32_t OTAssetContract::ProcessXMLNode(IrrXMLReader*& xml)
 {
-	int32_t nReturnVal = OTContract::ProcessXMLNode(xml);
+  const char * szFunc = "OTAssetContract::ProcessXMLNode";
+  int32_t nReturnVal = OTContract::ProcessXMLNode(xml);
 
-	// Here we call the parent class first.
-	// If the node is found there, or there is some error,
-	// then we just return either way.  But if it comes back
-	// as '0', then nothing happened, and we'll continue executing.
-	//
-	// -- Note you can choose not to call the parent if
-	// you don't want to use any of those xml tags.
-	
-	if (nReturnVal == 1 || nReturnVal == (-1))
-		return nReturnVal;
-	
-    const OTString strNodeName(xml->getNodeName());
+  // Here we call the parent class first.
+  // If the node is found there, or there is some error,
+  // then we just return either way.  But if it comes back
+  // as '0', then nothing happened, and we'll continue executing.
+  //
+  // -- Note you can choose not to call the parent if
+  // you don't want to use any of those xml tags.
+
+  if (nReturnVal == 1 || nReturnVal == (-1))
+	  return nReturnVal;
+
+  const OTString strNodeName(xml->getNodeName());
+
+  if (strNodeName.Compare("digitalAssetContract"))
+  {
+	  m_strVersion = xml->getAttributeValue("version");					
+	  
+	  OTLog::vOutput(1, "\n"
+			  "===> Loading XML portion of asset contract into memory structures...\n\n"
+			  "Digital Asset Contract: %s\nContract version: %s\n----------\n", m_strName.Get(), m_strVersion.Get());
+	  nReturnVal = 1;
+  }
+  else if (strNodeName.Compare("basketContract"))
+  {
+	  m_strVersion = xml->getAttributeValue("version");					
+	  
+	  OTLog::vOutput(1, "\n"
+			  "===> Loading XML portion of basket contract into memory structures...\n\n"
+			  "Digital Basket Contract: %s\nContract version: %s\n----------\n", m_strName.Get(), m_strVersion.Get());
+	  nReturnVal = 1;
+  }
+  else if (strNodeName.Compare("basketInfo")) 
+  {		
+	  if (false == OTContract::LoadEncodedTextField(xml, m_strBasketInfo))
+	  {
+		  OTLog::Error("Error in OTAssetContract::ProcessXMLNode: basketInfo field without value.\n");
+		  return (-1); // error condition
+	  }
+	  nReturnVal = 1;
+  }	
+  else if (strNodeName.Compare("issue"))
+  {
+	  m_strIssueCompany     = xml->getAttributeValue("company");
+	  m_strIssueEmail       = xml->getAttributeValue("email");
+	  m_strIssueContractURL = xml->getAttributeValue("contractUrl");
+	  m_strIssueType        = xml->getAttributeValue("type");
+	  
+	  OTLog::vOutput(2, "Loaded Issue company: %s\nEmail: %s\nContractURL: %s\nType: %s\n----------\n",
+			  m_strIssueCompany.Get(), m_strIssueEmail.Get(), m_strIssueContractURL.Get(),
+			  m_strIssueType.Get());
+	  nReturnVal = 1;
+  }
+  // TODO security validation: validate all the above and below values.
+  else if (strNodeName.Compare("currency") )    
+  {
+  m_bIsCurrency             = true;  // silver grams
+  m_bIsShares               = false;        
+
+	  m_strName                 = xml->getAttributeValue("name");
+	  m_strCurrencyName         = xml->getAttributeValue("name");
+	  m_strCurrencySymbol       = xml->getAttributeValue("symbol");
+	  m_strCurrencyType         = xml->getAttributeValue("type");
+
+	  m_strCurrencyTLA          = xml->getAttributeValue("tla");
+	  m_strCurrencyFactor       = xml->getAttributeValue("factor");
+	  m_strCurrencyDecimalPower = xml->getAttributeValue("decimal_power");
+	  m_strCurrencyFraction     = xml->getAttributeValue("fraction");
+	  
+	  OTLog::vOutput(2, "Loaded %s, Name: %s, TLA: %s, Symbol: %s\n"
+		  "Type: %s, Factor: %s, Decimal Power: %s, Fraction: %s\n----------\n", 
+		  strNodeName.Get(),
+		  m_strCurrencyName.Get(), m_strCurrencyTLA.Get(), m_strCurrencySymbol.Get(),
+		  m_strCurrencyType.Get(), m_strCurrencyFactor.Get(), m_strCurrencyDecimalPower.Get(),
+		  m_strCurrencyFraction.Get());
+	  nReturnVal = 1;
+  }
+
+    //  share_type some type, for example, A or B, or NV (non voting)
+    //        
+    //  share_name this is the int64_t legal name of the company
+    //        
+    //  share_symbol this is the trading name (8 chars max), as it might be 
+    //      displayed in a market contect, and should be unique within some given market
+    //        
+    //  share_issue_date date of start of this share item (not necessarily IPO)
+
+  else if (strNodeName.Compare("shares") ) {
+  m_bIsShares           = true;        // shares of pepsi
+  m_bIsCurrency         = false;
+
+	  m_strName			  = xml->getAttributeValue("name");
+	  m_strCurrencyName	  = xml->getAttributeValue("name");	
+	  m_strCurrencySymbol   = xml->getAttributeValue("symbol");
+	  m_strCurrencyType     = xml->getAttributeValue("type");
+
+	  m_strIssueDate        = xml->getAttributeValue("issuedate");
+	  
+	  OTLog::vOutput(2, "Loaded %s, Name: %s, Symbol: %s\n"
+		  "Type: %s, Issue Date: %s\n----------\n", 
+		  strNodeName.Get(),
+		  m_strCurrencyName.Get(), m_strCurrencySymbol.Get(),
+		  m_strCurrencyType.Get(),
+		  m_strIssueDate.Get());
+	  nReturnVal = 1;
+  } 
+  else if (strNodeName.Compare("scriptableContract")) {
     
-	if (strNodeName.Compare("digitalAssetContract"))
-	{
-		m_strVersion = xml->getAttributeValue("version");					
-		
-		OTLog::vOutput(1, "\n"
-				"===> Loading XML portion of asset contract into memory structures...\n\n"
-				"Digital Asset Contract: %s\nContract version: %s\n----------\n", m_strName.Get(), m_strVersion.Get());
-		nReturnVal = 1;
+    // Load up the Bylaws.
+    OTString strNumBylaws = xml->getAttributeValue("numBylaws");
+    int32_t nBylawCount	= strNumBylaws.Exists() ? atoi(strNumBylaws.Get()) : 0;
+    if (nBylawCount > 0) {
+      while (nBylawCount-- > 0) {
+	if (false == SkipToElement(xml)){
+		OTLog::vOutput(0, "%s: Failure: Unable to find expected element for bylaw. \n", szFunc);
+		return (-1);
 	}
-	else if (strNodeName.Compare("basketContract"))
-	{
-		m_strVersion = xml->getAttributeValue("version");					
-		
-		OTLog::vOutput(1, "\n"
-				"===> Loading XML portion of basket contract into memory structures...\n\n"
-				"Digital Basket Contract: %s\nContract version: %s\n----------\n", m_strName.Get(), m_strVersion.Get());
-		nReturnVal = 1;
-	}
-	else if (strNodeName.Compare("basketInfo")) 
-	{		
-		if (false == OTContract::LoadEncodedTextField(xml, m_strBasketInfo))
-		{
-			OTLog::Error("Error in OTAssetContract::ProcessXMLNode: basketInfo field without value.\n");
-			return (-1); // error condition
-		}
-		nReturnVal = 1;
-	}	
-	else if (strNodeName.Compare("issue"))
-	{
-		m_strIssueCompany     = xml->getAttributeValue("company");
-		m_strIssueEmail       = xml->getAttributeValue("email");
-		m_strIssueContractURL = xml->getAttributeValue("contractUrl");
-		m_strIssueType        = xml->getAttributeValue("type");
-		
-		OTLog::vOutput(2, "Loaded Issue company: %s\nEmail: %s\nContractURL: %s\nType: %s\n----------\n",
-				m_strIssueCompany.Get(), m_strIssueEmail.Get(), m_strIssueContractURL.Get(),
-				m_strIssueType.Get());
-		nReturnVal = 1;
-	}
-    // TODO security validation: validate all the above and below values.
-	else if (strNodeName.Compare("currency") )    
-	{
-        m_bIsCurrency             = true;  // silver grams
-        m_bIsShares               = false;        
 
-		m_strName                 = xml->getAttributeValue("name");
-		m_strCurrencyName         = xml->getAttributeValue("name");
-		m_strCurrencySymbol       = xml->getAttributeValue("symbol");
-		m_strCurrencyType         = xml->getAttributeValue("type");
+	if (!strcmp("bylaw", xml->getNodeName())) {
+	  OTString strName		= xml->getAttributeValue("name"); // bylaw name
+	  OTString strLanguage	= xml->getAttributeValue("language"); // The script language used in this bylaw.
 
-		m_strCurrencyTLA          = xml->getAttributeValue("tla");
-		m_strCurrencyFactor       = xml->getAttributeValue("factor");
-		m_strCurrencyDecimalPower = xml->getAttributeValue("decimal_power");
-		m_strCurrencyFraction     = xml->getAttributeValue("fraction");
-		
-		OTLog::vOutput(2, "Loaded %s, Name: %s, TLA: %s, Symbol: %s\n"
-                       "Type: %s, Factor: %s, Decimal Power: %s, Fraction: %s\n----------\n", 
-                       strNodeName.Get(),
-                       m_strCurrencyName.Get(), m_strCurrencyTLA.Get(), m_strCurrencySymbol.Get(),
-                       m_strCurrencyType.Get(), m_strCurrencyFactor.Get(), m_strCurrencyDecimalPower.Get(),
-                       m_strCurrencyFraction.Get());
-		nReturnVal = 1;
-	}
-	
-//  share_type some type, for example, A or B, or NV (non voting)
-//        
-//  share_name this is the int64_t legal name of the company
-//        
-//  share_symbol this is the trading name (8 chars max), as it might be 
-//      displayed in a market contect, and should be unique within some given market
-//        
-//  share_issue_date date of start of this share item (not necessarily IPO)
+	  OTString strNumVariable		= xml->getAttributeValue("numVariables"); // number of variables on this bylaw.
+	  OTString strNumClauses		= xml->getAttributeValue("numClauses"); // number of clauses on this bylaw.
+	  
+	  OTBylaw * pBylaw = new OTBylaw(strName.Get(), strLanguage.Get());
 
-	else if (strNodeName.Compare("shares") )       
-	{
-        m_bIsShares           = true;        // shares of pepsi
-        m_bIsCurrency         = false;
-        
-		m_strName			  = xml->getAttributeValue("name");
-		m_strCurrencyName	  = xml->getAttributeValue("name");	
-		m_strCurrencySymbol   = xml->getAttributeValue("symbol");
-		m_strCurrencyType     = xml->getAttributeValue("type");
-        
-		m_strIssueDate        = xml->getAttributeValue("issuedate");
-		
-		OTLog::vOutput(2, "Loaded %s, Name: %s, Symbol: %s\n"
-                       "Type: %s, Issue Date: %s\n----------\n", 
-                       strNodeName.Get(),
-                       m_strCurrencyName.Get(), m_strCurrencySymbol.Get(),
-                       m_strCurrencyType.Get(),
-                       m_strIssueDate.Get());
-		nReturnVal = 1;
+	  OT_ASSERT(NULL != pBylaw);
+
+	  // ---------------------------------------------------------------------------
+	  //
+	  // LOAD VARIABLES AND CONSTANTS.
+	  //
+	  int32_t nCount	= strNumVariable.Exists() ? atoi(strNumVariable.Get()) : 0;
+	  if (nCount > 0) {
+	      while (nCount-- > 0) {
+		  if (false == OTContract::SkipToElement(xml)) {
+		      OTLog::vError("%s: Error finding expected next element for variable.\n", szFunc);
+		      delete pBylaw; pBylaw=NULL;
+		      return (-1);
+		  }
+		  // -----------------------------------------------
+		  if ((xml->getNodeType() == irr::io::EXN_ELEMENT) && (!strcmp("variable", xml->getNodeName()))) {
+		      OTString strVarName = xml->getAttributeValue("name"); // Variable name (if needed in script code)
+		      OTString strVarValue = xml->getAttributeValue("value"); // Value stored in variable (If this is "true" then a real value is expected in a text field below. Otherwise, it's assumed to be a BLANK STRING.)
+		      OTString strVarType = xml->getAttributeValue("type"); // string or int64_t
+		      OTString strVarAccess = xml->getAttributeValue("access"); // constant, persistent, or important.
+
+		      // ----------------------------------
+
+		      if (!strVarName.Exists() || !strVarType.Exists() || !strVarAccess.Exists()) {
+			  OTLog::vError("%s: Expected missing name, type, or access type in variable.\n", szFunc);
+			  delete pBylaw; pBylaw=NULL;
+			  return (-1);
+		      }
+		      // ---------------------------------------
+		      // See if the same-named variable already exists on ANY of the OTHER BYLAWS
+		      // (There can only be one variable on an OTAssetContract with a given name.)
+		      //
+		      OTVariable * pVar = this->GetVariable(strVarName.Get());
+
+		      if (NULL != pVar) { // Uh-oh, it's already there!
+			  OTLog::vOutput(0, "%s: Error loading variable named %s, since one was "
+					  "already there on one of the bylaws.\n", szFunc, strVarName.Get());
+			  delete pBylaw; pBylaw=NULL;
+			  return (-1);
+		      }
+		      // The AddVariable call below checks to see if it's already there, but only for the
+		      // currently-loading bylaw.
+		      // Whereas the above call checks this OTScriptable for all the variables on the already-loaded bylaws.
+		      // ----------------------------------
+		      //
+		      // VARIABLE TYPE AND ACCESS TYPE
+		      //
+		      OTVariable::OTVariable_Type theVarType = OTVariable::Var_Error_Type;
+
+		      if (strVarType.Compare("integer"))
+			  theVarType = OTVariable::Var_Integer;
+		      else if (strVarType.Compare("string"))
+			  theVarType = OTVariable::Var_String;
+		      else if (strVarType.Compare("bool"))
+			  theVarType = OTVariable::Var_Bool;
+		      else
+			  OTLog::vError("%s: Bad variable type: %s.\n", szFunc, strVarType.Get());
+
+		      // ---------
+
+		      OTVariable::OTVariable_Access theVarAccess = OTVariable::Var_Error_Access;
+
+		      if (strVarAccess.Compare("constant"))
+			  theVarAccess = OTVariable::Var_Constant;
+		      else if (strVarAccess.Compare("persistent"))
+			  theVarAccess = OTVariable::Var_Persistent;
+		      else if (strVarAccess.Compare("important"))
+			  theVarAccess = OTVariable::Var_Important;
+		      else
+			  OTLog::vError("%s: Bad variable access type: %s.\n", szFunc, strVarAccess.Get());
+
+		      // ---------
+
+		      if ((OTVariable::Var_Error_Access == theVarAccess) ||
+			  (OTVariable::Var_Error_Type == theVarType))
+		      {
+			  OTLog::vError("%s: Error loading variable to bylaw: "
+					"bad type (%s) or access type (%s).\n",
+					szFunc, strVarType.Get(), strVarAccess.Get());
+			  delete pBylaw; pBylaw=NULL;
+			  return (-1);
+		      }
+		      // ---------------------------------------
+
+		      bool bAddedVar = false;
+		      const std::string str_var_name = strVarName.Get();
+
+		      switch (theVarType) {
+			  case OTVariable::Var_Integer:
+			      if (strVarValue.Exists()) {
+				  const int32_t nVarValue = atoi(strVarValue.Get());
+				  bAddedVar = pBylaw->AddVariable(str_var_name, nVarValue, theVarAccess);
+			      } else {
+				  OTLog::vError("%s: No value found for integer variable: %s\n", szFunc,
+						strVarName.Get());
+				  delete pBylaw; pBylaw=NULL;
+				  return (-1);
+			      }
+			      break;
+			      // ---------------------------------
+			  case OTVariable::Var_Bool:			    
+			      if (strVarValue.Exists()) {
+				  const bool bVarValue = strVarValue.Compare("true") ? true : false;
+				  bAddedVar = pBylaw->AddVariable(str_var_name, bVarValue, theVarAccess);
+			      } else {
+				  OTLog::vError("%s: No value found for bool variable: %s\n", szFunc,
+						strVarName.Get());
+				  delete pBylaw; pBylaw=NULL;
+				  return (-1);
+			      }
+			      break;
+			      // ---------------------------------
+			  case OTVariable::Var_String:                                 {
+			      // I realized I should probably allow empty strings.  :-P
+			      if (strVarValue.Exists() && strVarValue.Compare("exists")) {
+				  strVarValue.Release(); // probably unnecessary.
+				  if (false == OTContract::LoadEncodedTextField(xml, strVarValue)) {
+				      OTLog::vError("%s: No value found for string variable: %s\n", szFunc,
+						    strVarName.Get());
+				      delete pBylaw; pBylaw=NULL;
+				      return (-1);
+				  }
+			      } else {
+				  strVarValue.Release(); // Necessary. If it's going to be a blank string, then let's make sure.
+			      }
+
+			      const std::string str_var_value = strVarValue.Get();
+			      bAddedVar = pBylaw->AddVariable(str_var_name, str_var_value, theVarAccess);
+			  }
+			      break;
+			  default:
+			      OTLog::vError("%s: Wrong variable type... "
+					    "somehow AFTER I should have already detected it...\n", szFunc);
+			      delete pBylaw; pBylaw=NULL;
+			      return (-1);
+		      }
+		      // -------------------------------------------------
+
+		      if (false == bAddedVar) {
+			  OTLog::vError("%s: Failed adding variable to bylaw.\n", szFunc);
+			  delete pBylaw; pBylaw=NULL;
+			  return (-1);
+		      }
+		  } else {
+		      OTLog::vError("%s: Expected variable element in bylaw.\n", szFunc);
+		      delete pBylaw; pBylaw=NULL;
+		      return (-1); // error condition
+		  }
+	      } // while
+	  }
+	  
+	  
+	  // LOAD CLAUSES
+	  //
+	  nCount	= strNumClauses.Exists() ? atoi(strNumClauses.Get()) : 0;
+	  if (nCount > 0) {
+	      while (nCount-- > 0) {                            
+		  const char	*	pElementExpected	= "clause";
+		  OTString		strTextExpected; // clause's script code will go here.
+
+		  mapOfStrings	temp_MapAttributes;
+		  //
+		  // This map contains values we will also want, when we read the clause...
+		  // (The OTContract::LoadEncodedTextField call below will read all the values
+		  // as specified in this map.)
+		  //
+		  //
+		  temp_MapAttributes.insert(std::pair<std::string, std::string>("name", ""));
+		  
+  // 			    //Load the node data into an ASCII Armor object 
+  // 			    OTASCIIArmor possiblyASCIIArmoredText = new OTASCIIArmor(xml->getNodeData().c_str());
+  // 			    try{
+  // 			      OTString outputText;
+  // 			      OTLog::vOutput(0, "Trying to unpack the Clause text.");
+  // 			      if(false == possiblyAsCIIArmoredText.GetAndUnpackString(outputText)){
+  // 				OTLog::vOutput(0, "Failed unpacking the Clause text.  Will convert it now.");
+  // 				//Failed, but not catastrophically.  Assume its plain text
+  // 				//Drop into the catch block to set and pack the string, then update the xml
+  // 				throw 1;
+  // 			      }			      
+  // 			    }catch(...){
+  // 			      //String is not ASCII Armored. Lets do that and then update the xml
+  // 			      OTLog::vOutput(0, "Converting the Clause text to packed, base64 encoded text");
+  // 			      possiblyASCIIArmoredText.SetAndPackString(xml->getNodeData());
+  // 			    //strTextExpected = xml->getNodeData().c_str();
+  // 			    }
+		  
+		  
+		  if (false == OTContract::LoadEncodedTextFieldByName(xml, strTextExpected, pElementExpected, &temp_MapAttributes)) // </clause>
+		  {
+		      OTLog::vError("%s: Error: "
+				    "Expected %s element with text field.\n", szFunc,
+				    pElementExpected);
+		      delete pBylaw; pBylaw = NULL;
+		      return (-1); // error condition
+		  }
+
+		  // Okay we now have the script code in strTextExpected. Next, let's read the clause's NAME
+		  // from the map. If it's there, and presumably some kind of harsh validation for both, then
+		  // create a clause object and add to my list here.
+		  // ------------------------------------------
+
+		  mapOfStrings::iterator it = temp_MapAttributes.find("name");
+
+		  if ((it != temp_MapAttributes.end())) { // We expected this much.
+		      std::string & str_name = (*it).second;
+
+		      if (str_name.size() > 0) { // SUCCESS
+			  // See if the same-named clause already exists on ANY of the OTHER BYLAWS
+			  // (There can only be one clause on an OTAssetContract with a given name.)
+			  //
+			  OTClause * pClause = this->GetClause(str_name.c_str());
+
+			  if (NULL != pClause) { // Uh-oh, it's already there!
+			      OTLog::vOutput(0, "%s: Error loading clause named %s, since one was already "
+					      "there on one of the bylaws.\n", szFunc, str_name.c_str());
+			      delete pBylaw; pBylaw=NULL;
+			      return (-1);
+			  } else if (false == pBylaw->AddClause(str_name.c_str(), strTextExpected.Get())) {
+			      OTLog::vError("%s: Failed adding clause to bylaw.\n", szFunc);
+			      delete pBylaw; pBylaw=NULL;
+			      return (-1); // error condition
+			  }
+		      }
+		      // else it's empty, which is expected if nothing was there, since that's the default value
+		      // that we set above for "name" in temp_MapAttributes.
+		      else
+		      {
+			  OTLog::vError("%s: Expected clause name.\n", szFunc);
+			  delete pBylaw; pBylaw=NULL;
+			  return (-1); // error condition
+		      }
+		  } else {
+		      OTLog::vError("%s: Strange error: couldn't find name AT ALL.\n", szFunc);
+		      delete pBylaw; pBylaw=NULL;
+		      return (-1); // error condition
+		  }
+	      } // while
+	  } // if strNumClauses.Exists() && nCount > 0
+
+	  if (AddBylaw(*pBylaw)) {
+	      OTLog::vOutput(2, "%s: Loaded Bylaw: %s\n", szFunc,
+			      pBylaw->GetName().Get());
+	  } else {
+	      OTLog::vError("%s: Failed loading Bylaw: %s\n", szFunc,
+			    pBylaw->GetName().Get());
+	      delete pBylaw; pBylaw = NULL;
+	      return (-1); // error condition
+	  }
+	} else {
+		OTLog::vError("%s: Expected bylaw element.\n", szFunc);
+		return (-1); // error condition
 	}
-	
-	return nReturnVal;
+      } // while
+    }
+    nReturnVal = 1;
+  }
+
+  return nReturnVal;
 }
+
+
+
+
+
+
+OTAssetContract * OTAssetContract::InstantiateAssetContract(const OTString & strInput)
+{
+// 	static char buf[45] = "";
+// 	// ---------------------------------
+// 	if (false == strInput.Exists())
+//     {
+//         OTLog::vError("%s: Failure: Input string is empty.\n", __FUNCTION__);
+//         return NULL;
+//     }
+//     // --------------------------------------------------------------------
+//     OTString strContract(strInput);
+// 
+//     if (false == strContract.DecodeIfArmored(false)) // bEscapedIsAllowed=true by default.
+//     {
+//         OTLog::vError("%s: Input string apparently was encoded and then failed decoding. Contents: \n%s\n",
+//                       __FUNCTION__, strInput.Get());
+//         return NULL;
+//     }
+//     // ------------------------------------------
+//     // At this point, strContract contains the actual contents, whether they
+//     // were originally ascii-armored OR NOT. (And they are also now trimmed, either way.)
+//     //
+// 	strContract.reset(); // for sgets
+// 	buf[0] = 0; // probably unnecessary.
+// 	bool bGotLine = strContract.sgets(buf, 40);
+// 
+// 	if (!bGotLine)
+// 		return NULL;
+// 	// --------------------------------
+//     OTCronItem * pItem = NULL;
+// 
+// 	OTString strFirstLine(buf);
+// 	strContract.reset(); // set the "file" pointer within this string back to index 0.
+// 
+// 	// Now I feel pretty safe -- the string I'm examining is within
+// 	// the first 45 characters of the beginning of the contract, and
+// 	// it will NOT contain the escape "- " sequence. From there, if
+// 	// it contains the proper sequence, I will instantiate that type.
+// 	if (!strFirstLine.Exists() || strFirstLine.Contains("- -"))
+// 		return NULL;
+// 
+// 	// There are actually two factories that load smart contracts. See OTCronItem.
+// 	//
+// 	else if (strFirstLine.Contains("-----BEGIN SIGNED SMARTCONTRACT-----"))  // this string is 36 chars long.
+// 	{	pItem = new OTSmartContract();	OT_ASSERT(NULL != pItem); }
+// 
+// 	// Coming soon.
+// //	else if (strFirstLine.Contains("-----BEGIN SIGNED ENTITY-----"))  // this string is 29 chars long.
+// //	{	pItem = new OTEntity();			OT_ASSERT(NULL != pItem); }
+// 
+// 	// The string didn't match any of the options in the factory.
+// 	if (NULL == pItem)
+// 		return NULL;
+// 
+// 	// Does the contract successfully load from the string passed in?
+// 	if (pItem->LoadContractFromString(strContract))
+// 		return pItem;
+// 	else
+// 		delete pItem;
+
+
+	return NULL;
+}
+
+
+
+
+// VALIDATING IDENTIFIERS IN OTSCRIPTABLE.
+// Only alphanumerics are valid, or '_' (underscore)
+bool OTAssetContract::is_ot_namechar_invalid(char c) {
+	return !(isalnum(c) || (c == '_'));
+}
+
+
+// static
+bool OTAssetContract::ValidateName(const std::string str_name) {
+	if (str_name.size() <= 0) {
+		OTLog::Error("OTScriptable::ValidateName: Name has zero size.\n");
+		return false;
+	} else if (find_if(str_name.begin(), str_name.end(), is_ot_namechar_invalid) != str_name.end()) {
+		OTLog::vError("OTScriptable::ValidateName: Name fails validation testing: %s\n", str_name.c_str());
+		return false;
+	}
+
+	return true;
+}
+
+
+void OTAssetContract::RegisterOTNativeCallsWithScript(OTScript & theScript){
+#ifdef OT_USE_SCRIPT_CHAI
+	using namespace chaiscript;
+	
+	OTScriptChai * pScript = dynamic_cast<OTScriptChai *> (&theScript);
+
+	if (NULL != pScript){
+		OT_ASSERT(NULL != pScript->chai)
+		
+		pScript->chai->add(fun(&OTAssetContract::GetTime), "get_time");
+		
+		
+		pScript->chai->add(fun(&OTAssetContract::GetPi), "get_pi");
+		pScript->chai->add(fun(&OTAssetContract::GetSine), "sin");
+		pScript->chai->add(fun(&OTAssetContract::GetCosine), "cos");
+		pScript->chai->add(fun(&OTAssetContract::GetArcsine), "asin");
+		pScript->chai->add(fun(&OTAssetContract::GetSquareRoot), "sqrt");
+		pScript->chai->add(fun(&OTAssetContract::GetExponential), "exp");
+		pScript->chai->add(fun(&OTAssetContract::GetNaturalLogarithm), "ln");
+		//pScript->chai->add(fun(&OTSmartContract::GetAcctBalance, this), "get_acct_balance");
+		
+	}else
+#endif // OT_USE_SCRIPT_CHAI
+	{
+		OTLog::Error("OTAssetContract::RegisterOTNativeCallsWithScript: Failed dynamic casting OTScript to OTScriptChai \n");
+	}
+}
+
+
+
+// Returns a string, containing seconds as int32_t. (Time in seconds.)
+std::string OTAssetContract::GetTime(){ 
+    const time64_t  CURRENT_TIME = OTTimeGetCurrentTime();
+    const int64_t   lTime = OTTimeGetSecondsFromTime(CURRENT_TIME);
+    // ----------------------------------
+    OTString strTime;
+    strTime.Format("%lld", lTime);
+    return	strTime.Get();
+}
+// Returns a string, containing Pi
+std::string OTAssetContract::GetPi(){ 
+    OTString strPi;
+    strPi.Format("%lld", M_PI);
+    return strPi.Get();
+}
+// Returns a string, containing the sine value for the given angle in radians 
+std::string OTAssetContract::GetSine(const std::string angleRadians){ 
+    double angleRadiansValue = atof(angleRadians.c_str());
+    double result = sin(angleRadiansValue);
+    OTString strSine;
+    strSine.Format("%lld", result);
+    return strSine.Get();
+}
+// Returns a string, containing the cosine value for the given angle in radians 
+std::string OTAssetContract::GetCosine(const std::string angleRadians){ 
+    double angleRadiansValue = atof(angleRadians.c_str());
+    double result = cos(angleRadiansValue);
+    OTString strCosine;
+    strCosine.Format("%lld", result);
+    return strCosine.Get();
+}
+// Returns a string, containing the arcsine value for the given angle in radians 
+std::string OTAssetContract::GetArcsine(const std::string angleRadians){ 
+    double angleRadiansValue = atof(angleRadians.c_str());
+    double result = asin(angleRadiansValue);
+    OTString strArcsine;
+    strArcsine.Format("%lld", result);
+    return strArcsine.Get();
+}
+// Returns a string, containing the square root of the supplied value
+std::string OTAssetContract::GetSquareRoot(const std::string value){ 
+    double valueAsDouble = atof(value.c_str());
+    double result = sqrt(valueAsDouble);
+    OTString strSquareRoot;
+    strSquareRoot.Format("%lld", result);
+    return strSquareRoot.Get();
+}
+// Returns a string, containing the exponential of the supplied value
+std::string OTAssetContract::GetExponential(const std::string value){ 
+    double valueAsDouble = atof(value.c_str());
+    double result = exp(valueAsDouble);
+    OTString strExponential;
+    strExponential.Format("%lld", result);
+    return strExponential.Get();
+}
+// Returns a string, containing the natural logarithm of the supplied value
+std::string OTAssetContract::GetNaturalLogarithm(const std::string value){ 
+    double valueAsDouble = atof(value.c_str());
+    double result = log(valueAsDouble);
+    OTString strNaturalLogarithm;
+    strNaturalLogarithm.Format("%lld", result);
+    return strNaturalLogarithm.Get();
+}
+
+
+
+
+
+bool OTAssetContract::ExecuteClause(OTClause & theCallbackClause, mapOfVariables & theParameters, OTVariable & varReturnVal)
+{
+	const std::string str_clause_name	= theCallbackClause.GetName().Exists() ?
+											theCallbackClause.GetName().Get() : "";
+	OT_ASSERT(OTAssetContract::ValidateName(str_clause_name));
+
+	OTBylaw * pBylaw = theCallbackClause.GetBylaw();
+	OT_ASSERT(NULL != pBylaw);
+	// -------------------------------------------------
+	// By this point, we have the clause we are executing as theCallbackClause,
+	// and we have the Bylaw it belongs to, as pBylaw.
+	// ----------------------------------------
+
+	const std::string str_code		=	theCallbackClause.GetCode();	// source code for the script.
+	const std::string str_language	=	pBylaw->GetLanguage();			// language it's in. (Default is "chai")
+
+	_SharedPtr<OTScript> pScript = OTScriptFactory(str_language, str_code);
+
+	// ---------------------------------------------------------------
+	//
+	// SET UP THE NATIVE CALLS, REGISTER THE PARTIES, REGISTER THE VARIABLES, AND EXECUTE THE SCRIPT.
+	//
+	if (pScript)
+	{
+		// Register the special server-side native OT calls we make available to all scripts.
+		//
+		this->RegisterOTNativeCallsWithScript(*pScript);
+
+		// ---------------------------------------
+		// Add the parameters...
+		//
+		FOR_EACH(mapOfVariables, theParameters)
+		{
+			const std::string str_var_name	= (*it).first;
+			OTVariable * pVar				= (*it).second;
+			OT_ASSERT((NULL != pVar)&&(str_var_name.size() > 0));
+			// ---------------------------------------------------
+			pVar->RegisterForExecution(*pScript);
+		}
+
+		// ---------------------------------------
+		// Also need to loop through the Variables on pBylaw and register those as well.
+		//
+		pBylaw->RegisterVariablesForExecution(*pScript); // This sets all the variables as CLEAN so we can check for dirtiness after execution.
+		// ****************************************
+
+        
+
+		if (false == pScript->ExecuteScript(&varReturnVal)){
+			OTLog::vError("OTAssetContract::ExecuteClause: Error while running cclause: %s\n",
+						 theCallbackClause.GetName().Get());
+		}else{
+			OTLog::vOutput(0, "OTAssetContract::ExecuteClause: Successfully executed clause: %s\n\n",
+						   theCallbackClause.GetName().Get());
+			return true;
+		}
+	}
+	// ---------------------------------------------------------------
+	else
+	{
+		OTLog::Error("OTAssetContract::ExecuteClause: Error instantiating script!\n");
+	}
+
+
+	return false;
+}
+
+
+// Find the first (and hopefully the only) clause on this assetContract object,
+// with a given name. (Searches ALL Bylaws on *this.)
+OTClause * OTAssetContract::GetClause(const std::string str_clause_name)
+{
+	if (false == OTAssetContract::ValidateName(str_clause_name)) // this logs, FYI.
+	{
+		OTLog::vError("%s: Error: invalid name.\n", __FUNCTION__);
+		return NULL;
+	}
+	// --------------------------------
+	FOR_EACH(mapOfBylaws, m_mapBylaws)
+	{
+		OTBylaw * pBylaw = (*it).second;
+		OT_ASSERT(NULL != pBylaw);
+		// -------------------------
+		OTClause * pClause = pBylaw->GetClause(str_clause_name);
+
+		if (NULL != pClause) // found it.
+			return pClause;
+	}
+
+	return NULL;
+}
+
+
+OTBylaw * OTAssetContract::GetBylaw(const std::string str_bylaw_name){
+  
+	if (false == OTAssetContract::ValidateName(str_bylaw_name)) {
+		OTLog::vError("%s: Error: invalid name.\n", __FUNCTION__);
+		return NULL;
+	}
+	
+	mapOfBylaws::iterator iii = m_mapBylaws.find(str_bylaw_name);
+
+	if (m_mapBylaws.end() == iii){
+		return NULL;
+	}
+	
+	OTBylaw * pBylaw = (*iii).second;
+	OT_ASSERT(NULL != pBylaw);
+
+	return pBylaw;
+}
+
+OTBylaw * OTAssetContract::GetBylawByIndex(int32_t nIndex){
+  
+    if ((nIndex < 0) || (nIndex >= static_cast<int64_t>(m_mapBylaws.size()))) {
+        OTLog::vError("%s: Index out of bounds: %d\n", __FUNCTION__, nIndex);
+    }else {
+        int32_t nLoopIndex = -1; // will be 0 on first iteration.
+
+        FOR_EACH(mapOfBylaws, m_mapBylaws)
+        {
+            OTBylaw * pBylaw = (*it).second;
+            OT_ASSERT(NULL != pBylaw);
+	    
+            ++nLoopIndex; // 0 on first iteration.
+
+            if (nLoopIndex == nIndex)
+                return pBylaw;
+        }
+    }
+    return NULL;
+}
+
+// Look up the first (and hopefully only) variable registered for a given name.
+// (Across all of my Bylaws)
+//
+OTVariable * OTAssetContract::GetVariable(const std::string str_VarName) {
+	if (false == OTAssetContract::ValidateName(str_VarName)) { 
+		OTLog::Error("OTAssetContract::GetVariable:  Error: invalid name.\n");
+		return NULL;
+	}
+
+	FOR_EACH(mapOfBylaws, m_mapBylaws) {
+		OTBylaw * pBylaw = (*it).second;
+		OT_ASSERT(NULL != pBylaw);
+
+		OTVariable * pVar = pBylaw->GetVariable(str_VarName);
+
+		if (NULL != pVar) // found it.
+			return pVar;
+	}
+
+	return NULL;
+}
+
+
+
+bool OTAssetContract::AddBylaw(OTBylaw & theBylaw){
+	const std::string str_name = theBylaw.GetName().Get();
+
+	if (false == OTAssetContract::ValidateName(str_name)) {
+		OTLog::Error("OTAssetContract::AddBylaw:  Error: invalid name.\n");
+		return false;
+	}
+
+	if (m_mapBylaws.find(str_name) == m_mapBylaws.end()) {
+		// Careful:  This ** DOES ** TAKE OWNERSHIP!  theBylaw will get deleted when this OTAssetContract is.
+		m_mapBylaws.insert( std::pair<std::string, OTBylaw *>(str_name, &theBylaw)) ;
+
+		theBylaw.SetOwnerAgreement(*this);
+
+		return true;
+	} else {
+		OTLog::Output(0, "OTAssetContract::AddBylaw: Failed attempt: bylaw already exists on asset contract.\n ");
+	}
+
+	return false;
+}
+
+
+bool OTAssetContract::Compare(OTAssetContract & rhs){
+	const char * szFunc = "OTAssetContract::Compare";
+	if (this->GetBylawCount() != rhs.GetBylawCount()) {
+		OTLog::vOutput(0, "%s: The number of bylaws does not match.\n", szFunc);
+		return false;
+	}
+	
+	FOR_EACH_CONST(mapOfBylaws, m_mapBylaws) {
+		const std::string str_bylaw_name = (*it).first;
+		OTBylaw * pBylaw = (*it).second;
+		OT_ASSERT(NULL != pBylaw);
+
+		OTBylaw * p2 = rhs.GetBylaw(str_bylaw_name);
+
+		if (NULL == p2) {
+			OTLog::vOutput(0, "%s: Unable to find bylaw %s on rhs.\n", szFunc,
+						   str_bylaw_name.c_str());
+			return false;
+		} else if ( ! pBylaw->Compare(*p2) ) {
+			OTLog::vOutput(0, "%s: Bylaws don't match: %s.\n", szFunc,
+						   str_bylaw_name.c_str());
+			return false;
+		}
+	}
+	
+	return true;
+}
+
+
+
+
+
+
+
+
+
+
+
+

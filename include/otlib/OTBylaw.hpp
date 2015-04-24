@@ -137,6 +137,7 @@
 
 class OTClause;
 class OTScriptable;
+class OTContract;
 
 typedef std::map<std::string, std::string>		mapOfCallbacks;
 typedef std::map<std::string, OTClause *>		mapOfClauses;
@@ -163,7 +164,7 @@ class OTBylaw
 	mapOfHooks		m_mapHooks;		// multimap of server hooks associated with clauses. string / string
 	mapOfCallbacks	m_mapCallbacks;	// map of standard callbacks associated with script clauses. string / string
 
-	OTScriptable *	m_pOwnerAgreement; // This Bylaw is owned by an agreement (OTScriptable-derived.)
+	OTContract *	m_pOwnerAgreement; // This Bylaw is owned by an agreement (OTScriptable-derived.)
 public:
 	EXPORT	const OTString & GetName()     const { return m_strName; }
 	EXPORT  const char     * GetLanguage() const;
@@ -212,8 +213,8 @@ public:
 	// ---------------------
 	// This pointer isn't owned -- just stored for convenience.
 	//
-	EXPORT	OTScriptable * GetOwnerAgreement() { return m_pOwnerAgreement; }
-	EXPORT	void SetOwnerAgreement(OTScriptable & theOwner) { m_pOwnerAgreement = &theOwner; }
+	EXPORT	OTContract * GetOwnerAgreement() { return m_pOwnerAgreement; }
+	EXPORT	void SetOwnerAgreement(OTContract & theOwner) { m_pOwnerAgreement = &theOwner; }
 	// ---------------------
 	EXPORT  OTBylaw();
 	EXPORT	OTBylaw(const char * szName, const char * szLanguage);

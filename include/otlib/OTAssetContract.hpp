@@ -133,6 +133,7 @@
 #ifndef __OT_ASSET_CONTRACT_HPP__
 #define __OT_ASSET_CONTRACT_HPP__
 
+
 #include "OTContract.hpp"
 
 class OTAccount;
@@ -143,10 +144,22 @@ class OTIdentifier;
 class OTPseudonym;
 class OTString;
 
+class OTBylaw;
+class OTClause;
+class OTScript;
+class OTVariable;
+
+typedef std::map<std::string, OTBylaw *>		mapOfBylaws;
+typedef std::map<std::string, OTClause *>		mapOfClauses;
+typedef std::map<std::string, OTVariable *>		mapOfVariables;
 
 class OTAssetContract : public OTContract
 {
 protected:
+	mapOfBylaws			m_mapBylaws;	// The Bylaws for this asset.
+	// -------------------------------------------------------------------
+	
+	
     // basket currencies only:
 	OTString	m_strBasketInfo;	// If this contract is for a basket currency, the OTBasket object is stored here.
 
@@ -183,6 +196,7 @@ EXPORT	bool CreateBasket(OTBasket & theBasket, OTPseudonym & theSigner);
 inline const OTString & GetBasketInfo() const { return m_strBasketInfo; }
     // ----------------------------------
 EXPORT	OTAssetContract();
+EXPORT	OTAssetContract(OTString & unsignedXML);
 EXPORT	OTAssetContract(OTString & name, OTString & foldername, OTString & filename, OTString & strID);
 EXPORT	virtual ~OTAssetContract();
 	// ----------------------------------
@@ -219,6 +233,41 @@ EXPORT    const OTString & GetCurrencyTLA      () const { return m_strCurrencyTL
 	virtual bool SaveContractWallet(std::ofstream & ofs);
 	// ----------------------------------
 	virtual bool DisplayStatistics(OTString & strContents) const;
+	
+	
+	
+	
+	
+	
+	int32_t GetBylawCount() const { return static_cast<int32_t> (m_mapBylaws.size()); }
+	virtual bool AddBylaw(OTBylaw & theBylaw); // takes ownership.
+EXPORT	OTBylaw  * GetBylaw	(const std::string str_bylaw_name );
+EXPORT	OTClause * GetClause(const std::string str_clause_name);
+EXPORT	OTBylaw  * GetBylawByIndex(int32_t nIndex);
+	OTVariable	* GetVariable(const std::string str_VarName);       // See if a variable exists for a given variable name.
+	
+	bool ExecuteClause (OTClause & theCallbackClause, mapOfVariables & theParameters, OTVariable & varReturnVal);
+
+	virtual void RegisterOTNativeCallsWithScript(OTScript & theScript);
+	// ----------------
+	virtual bool Compare(OTAssetContract & rhs);
+	// ----------------
+EXPORT	static OTAssetContract * InstantiateAssetContract(const OTString & strInput);
+
+	static bool is_ot_namechar_invalid(char c) ;
+	static bool ValidateName(const std::string str_name);
+	// For use from inside server-side scripts.
+	static std::string GetTime(); // Returns a string, containing seconds as int32_t. (Time in seconds.)
+	static std::string GetPi(); // Returns a string, containing Pi
+	static std::string GetSine(const std::string angleRadians); // Returns a string, containing the sine value for the given angle in radians
+	static std::string GetCosine(const std::string angleRadians); // Returns a string, containing the cosine value for the given angle in radians
+	static std::string GetArcsine(const std::string angleRadians); // Returns a string, containing the arcsine value for the given angle in radians
+	static std::string GetSquareRoot(const std::string value); // Returns a string, containing the square root of the supplied value
+	static std::string GetExponential(const std::string value); // Returns a string, containing the exponental of the supplied value
+	static std::string GetNaturalLogarithm(const std::string value); // Returns a string, containing the natural logarithm of the supplied value
+	
+	virtual void Release();
+	void Release_Script();
 };
 
 

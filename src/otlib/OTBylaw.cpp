@@ -134,6 +134,7 @@
 
 #include "OTBylaw.hpp"
 
+#include "OTContract.hpp"
 #include "OTClause.hpp"
 #include "OTLog.hpp"
 #include "OTScriptable.hpp"
