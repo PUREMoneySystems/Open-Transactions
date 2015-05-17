@@ -1537,7 +1537,7 @@ void OTAssetContract::RegisterOTNativeCallsWithScript(OTScript & theScript){
 		pScript->chai->add(fun(&OTAssetContract::GetSquareRoot), "sqrt");
 		pScript->chai->add(fun(&OTAssetContract::GetExponential), "exp");
 		pScript->chai->add(fun(&OTAssetContract::GetNaturalLogarithm), "ln");
-		//pScript->chai->add(fun(&OTSmartContract::GetAcctBalance, this), "get_acct_balance");
+		//pScript->chai->add(fun(&GetAcctountBalance, this), "get_account_balance");
 		
 	}else
 #endif // OT_USE_SCRIPT_CHAI
@@ -1554,13 +1554,13 @@ std::string OTAssetContract::GetTime(){
     const int64_t   lTime = OTTimeGetSecondsFromTime(CURRENT_TIME);
     // ----------------------------------
     OTString strTime;
-    strTime.Format("%lld", lTime);
+    strTime.Format("%F", lTime);
     return	strTime.Get();
 }
 // Returns a string, containing Pi
 std::string OTAssetContract::GetPi(){ 
     OTString strPi;
-    strPi.Format("%lld", M_PI);
+    strPi.Format("%F", M_PI);
     return strPi.Get();
 }
 // Returns a string, containing the sine value for the given angle in radians 
@@ -1568,7 +1568,7 @@ std::string OTAssetContract::GetSine(const std::string angleRadians){
     double angleRadiansValue = atof(angleRadians.c_str());
     double result = sin(angleRadiansValue);
     OTString strSine;
-    strSine.Format("%lld", result);
+    strSine.Format("%F", result);
     return strSine.Get();
 }
 // Returns a string, containing the cosine value for the given angle in radians 
@@ -1576,7 +1576,7 @@ std::string OTAssetContract::GetCosine(const std::string angleRadians){
     double angleRadiansValue = atof(angleRadians.c_str());
     double result = cos(angleRadiansValue);
     OTString strCosine;
-    strCosine.Format("%lld", result);
+    strCosine.Format("%F", result);
     return strCosine.Get();
 }
 // Returns a string, containing the arcsine value for the given angle in radians 
@@ -1584,7 +1584,7 @@ std::string OTAssetContract::GetArcsine(const std::string angleRadians){
     double angleRadiansValue = atof(angleRadians.c_str());
     double result = asin(angleRadiansValue);
     OTString strArcsine;
-    strArcsine.Format("%lld", result);
+    strArcsine.Format("%F", result);
     return strArcsine.Get();
 }
 // Returns a string, containing the square root of the supplied value
@@ -1592,7 +1592,7 @@ std::string OTAssetContract::GetSquareRoot(const std::string value){
     double valueAsDouble = atof(value.c_str());
     double result = sqrt(valueAsDouble);
     OTString strSquareRoot;
-    strSquareRoot.Format("%lld", result);
+    strSquareRoot.Format("%F", result);
     return strSquareRoot.Get();
 }
 // Returns a string, containing the exponential of the supplied value
@@ -1600,7 +1600,7 @@ std::string OTAssetContract::GetExponential(const std::string value){
     double valueAsDouble = atof(value.c_str());
     double result = exp(valueAsDouble);
     OTString strExponential;
-    strExponential.Format("%lld", result);
+    strExponential.Format("%F", result);
     return strExponential.Get();
 }
 // Returns a string, containing the natural logarithm of the supplied value
@@ -1608,7 +1608,7 @@ std::string OTAssetContract::GetNaturalLogarithm(const std::string value){
     double valueAsDouble = atof(value.c_str());
     double result = log(valueAsDouble);
     OTString strNaturalLogarithm;
-    strNaturalLogarithm.Format("%lld", result);
+    strNaturalLogarithm.Format("%F", result);
     return strNaturalLogarithm.Get();
 }
 

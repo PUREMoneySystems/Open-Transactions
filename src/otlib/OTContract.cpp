@@ -2337,6 +2337,7 @@ void OTContract::CreateInnerContents()
                 if (pNym->GetAltLocation().Exists())
                     ascAltLocation.SetString(pNym->GetAltLocation(), false); //bLineBreaks=true by default. But here, no line breaks.
 
+		std::cout << "Writing Signer Nym" << std::endl;
                 strTemp.Concatenate("<%s hasCredentials=\"%s\"\n"
                                     " nymID=\"%s\"\n"
                                     " altLocation=\"%s\""
@@ -2346,8 +2347,11 @@ void OTContract::CreateInnerContents()
                                     strNymID.Get(),
                                     ascAltLocation.Get());
                 // ----------------------------------
+		
+		std::cout << "NymIDSource = " << pNym->GetNymIDSource().Get() << std::endl;
                 if (pNym->GetNymIDSource().Exists())
                 {
+		  std::cout << "Writing Signer Nym" << std::endl;
                     OTASCIIArmor ascNymIDSource(pNym->GetNymIDSource());
                     strTemp.Concatenate("<nymIDSource>\n%s</nymIDSource>\n\n", ascNymIDSource.Get());
                 }
